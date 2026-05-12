@@ -14,7 +14,7 @@ WEBHOOK_URL = "https://discord.com/api/webhooks/1503841297256022038/6RDdh0dwhvCw
 
 CHECK_INTERVAL = 300
 
-MAX_PAGES = 5
+MAX_PAGES = 20
 
 MIN_PRICE = 80000
 
@@ -204,7 +204,6 @@ async def send_alert(
 
             print(f"❌ DISCORD ERROR [{player}]")
 
-
 # =====================================================
 
 
@@ -213,33 +212,43 @@ async def get_player_links(session, page):
     url = f"https://www.futbin.com/players?page={page}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        )
     }
 
-    async with session.get(
-        url,
-        headers=headers,
-        timeout=30
-    ) as response:
+    try:
 
-        html = await response.text()
+        async with session.get(
+            url,
+            headers=headers,
+            timeout=30
+        ) as response:
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
+            html = await response.text()
+
+    except Exception as e:
+
+        print("❌ PAGE ERROR", e)
+
+        return []
 
     links = set()
 
-    for a in soup.find_all("a", href=True):
+    matches = re.findall(
+        r'href="(/26/player/\d+/[^"]+)"',
+        html
+    )
 
-        href = a["href"]
+    for match in matches:
 
-        if "/player/" in href:
+        full_url = "https://www.futbin.com" + match
 
-            links.add(
-                "https://www.futbin.com" + href
-            )
+        links.add(full_url)
 
     return list(links)
 
@@ -250,7 +259,13 @@ async def get_player_links(session, page):
 async def check_player(session, url):
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        )
     }
 
     try:
@@ -283,14 +298,14 @@ async def check_player(session, url):
     if PLATFORM == "PC":
 
         lowest_match = re.search(
-            r'PCPrice2\\":\\"([\d,]+)\\"',
+            r'PCPrice(?:2)?\\":\\"([\d,]+)\\"',
             html
         )
 
     else:
 
         lowest_match = re.search(
-            r'LCPrice2\\":\\"([\d,]+)\\"',
+            r'LCPrice(?:2)?\\":\\"([\d,]+)\\"',
             html
         )
 
