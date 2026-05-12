@@ -1,3 +1,6 @@
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.13"
+
 [phases.setup]
 nixPkgs = ["python313", "chromium"]
 
@@ -8,4 +11,4 @@ cmds = [
 ]
 
 [start]
-cmd = "python tracker.py"
+cmd = "playwright install chromium && python tracker.py"
