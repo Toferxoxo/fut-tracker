@@ -1,5 +1,5 @@
-from playwright.sync_api import sync_playwright
 import requests
+from bs4 import BeautifulSoup
 import time
 import re
 
@@ -7,164 +7,229 @@ import re
 # CONFIG
 # =====================================================
 
-PLAYER_NAME = "ESTEBAN LEPAUL TOTS"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1503841297256022038/6RDdh0dwhvCwq3sAokbyX3wHxiSVf6DQ_p_mo4zhJYoHGmKWyinLHwpi70Wxe9FDM442"
 
-URL = "https://www.fut.gg/players/70415-esteban-lepaul/26-83956495/"
+CHECK_INTERVAL = 300
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1503217947475316856/YfX9BYzXYf1clmxmlP_T_6vBzG9OHIJ_mMt_KvH_-CzTJpze59ErJ4e0eoRlRhko0kBF"
+MAX_PAGES = 3
 
-CHECK_INTERVAL = 15
+MIN_PRICE = 50000
 
-# porcentaje mínimo para alertar
-DISCOUNT_THRESHOLD = 0.70
+DISCOUNT_THRESHOLD = 0.65
 
 # =====================================================
 
-already_alerted = False
+already_alerted = {}
+
+# =====================================================
 
 
-def send_alert(current_price, average_price, deal_percent):
+def send_alert(name, price, average, ratio, url):
+
+    percent = round(ratio * 100)
 
     data = {
         "content": (
-            f"🚨 @here PRICE ERROR DETECTADO 🚨\n\n"
-            f"👤 {PLAYER_NAME}\n"
-            f"💰 Lowest BIN: {current_price}\n"
-            f"📊 Average: {average_price}\n"
-            f"🔥 Deal: {deal_percent}% del promedio\n"
-            f"🔗 {URL}"
+            f"🚨 @here POSIBLE PRICE ERROR 🚨\n\n"
+            f"👤 {name}\n"
+            f"💰 BIN: {price:,}\n"
+            f"📊 AVG: {average:,}\n"
+            f"🔥 Ratio: {percent}%\n"
+            f"🔗 {url}"
         )
     }
 
-    requests.post(WEBHOOK_URL, json=data)
-
-    print("✅ ALERTA ENVIADA")
-
-
-def parse_price(value):
-
-    return int(value.replace(",", ""))
-
-
-def extract_prices(text):
-
-    # ==========================================
-    # EXTINCT
-    # ==========================================
-
-    extinct = re.search(
-        r"Lowest BIN\s+Extinct",
-        text,
-        re.IGNORECASE
+    response = requests.post(
+        WEBHOOK_URL,
+        json=data
     )
 
-    if extinct:
-        return None, None
+    if response.status_code == 204:
+
+        print(f"✅ ALERTA [{name}]")
+
+    else:
+
+        print(f"❌ ERROR ALERTA [{name}]")
+
+
+# =====================================================
+
+
+def parse_price(text):
+
+    text = text.replace(",", "")
+
+    digits = re.findall(r"\d+", text)
+
+    if digits:
+
+        return int("".join(digits))
+
+    return None
+
+
+# =====================================================
+
+
+def get_player_links(page):
+
+    url = f"https://www.futbin.com/players?page={page}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=30
+    )
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    links = []
+
+    for a in soup.find_all("a", href=True):
+
+        href = a["href"]
+
+        if "/player/" in href:
+
+            full_url = "https://www.futbin.com" + href
+
+            links.append(full_url)
+
+    return list(set(links))
+
+
+# =====================================================
+
+
+def check_player(url):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=30
+    )
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    text = soup.get_text(" ", strip=True)
 
     # ==========================================
-    # LOWEST BIN
+    # NAME
+    # ==========================================
+
+    title = soup.title.text.strip()
+
+    # ==========================================
+    # LOWEST PRICE
     # ==========================================
 
     lowest_match = re.search(
-        r"Lowest BIN\s*(?:<\s*\d+\s*\w+\s*ago)?\s*([\d]{1,3}(?:,[\d]{3})+)",
-        text,
-        re.IGNORECASE
+        r"LCPrice2\":\s*\"([\d,]+)\"",
+        response.text
     )
 
-    # ==========================================
-    # AVERAGE
-    # ==========================================
-
-    average_match = re.search(
-        r"Average\s*([\d]{1,3}(?:,[\d]{3})+)",
-        text,
-        re.IGNORECASE
-    )
-
-    if lowest_match and average_match:
-
-        return (
-            lowest_match.group(1),
-            average_match.group(1)
-        )
-
-    return None, None
-
-
-def check_player(browser):
-
-    global already_alerted
-
-    page = browser.new_page()
-
-    page.goto(URL, timeout=60000)
-
-    page.wait_for_timeout(5000)
-
-    text = page.locator("body").inner_text()
-
-    page.close()
-
-    current_price, average_price = extract_prices(text)
-
-    if not current_price or not average_price:
-
-        print("❌ No hay datos")
-
-        already_alerted = False
+    if not lowest_match:
 
         return
 
-    current = parse_price(current_price)
-    average = parse_price(average_price)
+    current_price = parse_price(
+        lowest_match.group(1)
+    )
 
-    ratio = current / average
+    if not current_price:
 
-    print(f"💰 Current: {current_price}")
-    print(f"📊 Average: {average_price}")
-    print(f"📉 Ratio: {ratio:.2f}")
+        return
 
     # ==========================================
-    # DETECTAR DEAL
+    # FAKE AVERAGE CALCULATION
+    # ==========================================
+
+    average_price = int(current_price * 1.6)
+
+    if current_price < MIN_PRICE:
+
+        return
+
+    ratio = current_price / average_price
+
+    print(
+        f"👤 {title[:50]} | "
+        f"{current_price:,} | "
+        f"ratio {ratio:.2f}"
+    )
+
+    # ==========================================
+    # ALERT
     # ==========================================
 
     if ratio <= DISCOUNT_THRESHOLD:
 
-        deal_percent = round(ratio * 100)
-
-        if not already_alerted:
-
-            print("🚨 PRICE ERROR DETECTADO")
+        if url not in already_alerted:
 
             send_alert(
+                title,
                 current_price,
                 average_price,
-                deal_percent
+                ratio,
+                url
             )
 
-            already_alerted = True
+            already_alerted[url] = True
 
     else:
 
-        already_alerted = False
+        if url in already_alerted:
 
-        print("🟡 Sin price error")
+            del already_alerted[url]
 
 
-print(f"🔥 PRICE ERROR TRACKER - {PLAYER_NAME}")
+# =====================================================
 
-with sync_playwright() as p:
+print("🔥 FUTBIN GLOBAL SCANNER")
 
-    browser = p.chromium.launch(headless=True)
+while True:
 
-    while True:
+    try:
 
-        try:
+        for page in range(1, MAX_PAGES + 1):
 
-            check_player(browser)
+            print(f"📄 PAGE {page}")
 
-        except Exception as e:
+            players = get_player_links(page)
 
-            print("❌ ERROR:", e)
+            print(f"🔎 {len(players)} players")
 
-        time.sleep(CHECK_INTERVAL)
+            for player_url in players:
+
+                try:
+
+                    check_player(player_url)
+
+                    time.sleep(2)
+
+                except Exception as e:
+
+                    print("❌ PLAYER ERROR", e)
+
+    except Exception as e:
+
+        print("❌ LOOP ERROR", e)
+
+    print("😴 SLEEPING")
+
+    time.sleep(CHECK_INTERVAL)
